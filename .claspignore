@@ -1,0 +1,9 @@
+src/**
+build.js
+.chk.js
+node_modules/**
+.clasp.json.example
+CLASP.md
+patch*.js
+src/app.backup.js
+thumbs.json

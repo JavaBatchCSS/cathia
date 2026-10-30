@@ -1,0 +1,6 @@
+.clasp.json
+node_modules/
+*.bak
+src/app.backup.js
+thumbs.json
+.chk.js
