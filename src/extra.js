@@ -68,13 +68,6 @@ EXB.cuisine=function(P,a,q){const Lp=q.long,Wp=q.larg,H=q.h,Wc=q.lc||600,ht=q.ht
  /* dessus de la colonne : cadre en mi-bois sur les DEUX côtés, filet dessus */
  const tf=topFrame(P,a,q,{x0:x1,x1:x2,y:yt,zt:ztop,dl:50,dc:50,rp,pl,nameL:'Lisse haute étagère',crossZ:ztop-80});
  mkNet(newAsm('Filet du haut',a.id).id,'Filet de ficelle (haut)',P,yt,ztop,x1+rp+8,x2-rp-8,50);
- /* contreventement : sans traverses de largeur au bas, des diagonales tiennent la structure dans les deux sens */
- const cv=newAsm('Contreventement',a.id),dB=40,off=rp+dB/2,ext=(A,B,k)=>{const v=nrm(sub(B,A));return[sub(A,mul(v,k)),add(B,mul(v,k))]};
- const brace=(nm,A,B,hit)=>{try{const[A2,B2]=ext(A,B,60),b=bar(nm,A2,B2,dB,cv.id,'#bd935a');hit.forEach(p=>{try{mkLash(b,p)}catch(er){console.warn('brêlage contreventement',er)}})}catch(er){console.warn('contreventement',er)}};
- [-1,1].forEach(s=>{const y=s*(yt+off);
-  brace('Diagonale (travée plan de travail)',P(x0,y,150),P(x1,y,zt-150),[post(x0,s),post(x1,s)]);
-  brace('Diagonale (travée étagère)',P(x1,y,150),P(x2,y,Math.min(ztop-250,2*H-150)),[post(x1,s),post(x2,s)])});
- [[x0-off,[x0,0]],[x1-off,[x1,0]],[x2+off,[x2,0]]].forEach(([xp,[xa]])=>brace('Diagonale (sens de la largeur)',P(xp,-yt,150),P(xp,yt,zb-90),[post(xa,-1),post(xa,1)]));
  /* colonne à gauche : on tourne tout l'ensemble de 180° autour de la verticale */
  if(q.cote=='gauche'){const L=piecesOf(a.id),[mn,mx]=bounds(L),cc=[(mn[0]+mx[0])/2,(mn[1]+mx[1])/2,0],R=new THREE.Matrix4().makeTranslation(cc[0],cc[1],0).multiply(new THREE.Matrix4().makeRotationZ(Math.PI)).multiply(new THREE.Matrix4().makeTranslation(-cc[0],-cc[1],0));
   L.forEach(o=>{const M0=new THREE.Matrix4().compose(new THREE.Vector3(...o.pos),new THREE.Quaternion().setFromEuler(new THREE.Euler(o.rot[0]*D,o.rot[1]*D,o.rot[2]*D,'ZYX')),new THREE.Vector3(1,1,1));setMat(o,R.clone().multiply(M0))})}};
