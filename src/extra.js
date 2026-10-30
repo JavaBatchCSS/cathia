@@ -82,3 +82,30 @@ function mtWin(s){const T=(MT_TOOLS.find(t=>t[0]==s.tool)||[])[1]||'Opération';
  else{const o=s.objs[0];rows=[o.name+(o.type=='trav'&&o.p?' — Ø '+Math.round(o.p.d)+' × '+Math.round(o.p.L)+' mm':''),s.objs.length>1?s.objs.length+' pièces':''].filter(Boolean)}
  const el=document.createElement('div');el.id='mtw';el.innerHTML=`<b>${esc(T)}</b>${rows.map(r=>`<div>${esc(r)}</div>`).join('')}<button class="p">${s.kind=='joint'?'Appliquer':'Créer'}</button>`;document.body.appendChild(el);return el}
 function mtStart(){const tops=Object.values(asms).filter(x=>!x.par);montage(selA!=null?selA:tops.length==1?tops[0].id:0)}
+
+/* ===== Assistant : Gemini, avec la clé personnelle (gratuite) de l'utilisateur ; aucun message ne passe par un serveur CathIA ===== */
+const GK={get:()=>{try{return localStorage.getItem('cathia.gk')||''}catch(e){return''}},set:v=>{try{v?localStorage.setItem('cathia.gk',v):localStorage.removeItem('cathia.gk')}catch(e){}}},GEM_MODELS=['gemini-flash-latest','gemini-2.5-flash'];
+function geminiSchema(s){if(!s||typeof s!='object')return s;const o={};for(const k in s){if(k=='additionalProperties'||k=='$schema')continue;o[k]=k=='properties'?Object.fromEntries(Object.entries(s[k]).map(([p,v])=>[p,geminiSchema(v)])):geminiSchema(s[k])}return o}
+async function geminiAI(messages,opt={}){const key=GK.get();if(!key){const e=new Error('nokey');e.code='nokey';throw e}
+ const tools=Array.isArray(opt.tools)?opt.tools:[],lead=messages[0],turns=messages.slice(1);let text='';
+ const contents=turns.map(m=>({role:m.role=='assistant'?'model':'user',parts:[{text:String(m.content)}]}));
+ if(opt.images&&opt.images.length&&contents.length){const last=contents[contents.length-1];for(const b of opt.images)last.parts.push({inline_data:{mime_type:b.type||'image/jpeg',data:await b64of(b)}})}
+ const decl=tools.map(t=>({name:t.name,description:t.description||t.name,...(t.inputSchema&&t.inputSchema.properties&&Object.keys(t.inputSchema.properties).length?{parameters:geminiSchema(t.inputSchema)}:{})}));
+ try{for(let it=0;it<8;it++){
+  const body={systemInstruction:{parts:[{text:String(lead.content)}]},contents,generationConfig:{temperature:.4,maxOutputTokens:2048}};if(decl.length)body.tools=[{functionDeclarations:decl}];
+  let r=null;for(const m of GEM_MODELS){r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+m+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body),signal:opt.signal});if(r.status!=404)break}
+  if(r.status==400||r.status==403||r.status==401){const j=await r.json().catch(()=>({})),e=new Error('badkey');e.code='badkey';e.text=(j.error&&j.error.message||'').slice(0,160);throw e}
+  if(r.status==429){const e=new Error('rate');e.code='rate_limited';e.text=text;throw e}
+  if(!r.ok){const e=new Error('HTTP '+r.status);e.text=text;throw e}
+  const j=await r.json(),parts=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[],calls=parts.filter(p=>p.functionCall),tx=parts.filter(p=>p.text).map(p=>p.text).join('');
+  if(tx){text+=(text?'\n\n':'')+tx;opt.onText&&opt.onText({text})}
+  if(!calls.length)break;
+  contents.push({role:'model',parts});const resp=[];
+  for(const p of calls){const t=tools.find(x=>x.name==p.functionCall.name);let out;try{out=t?await t.execute(p.functionCall.args||{}):'Outil inconnu'}catch(e){out='Erreur : '+e.message}resp.push({functionResponse:{name:p.functionCall.name,response:{result:String(out)}}})}
+  contents.push({role:'user',parts:resp})}}
+ catch(e){if(e.name=='AbortError'){const x=new Error('cancel');x.code='cancelled';x.text=text;throw x}throw e}
+ return{text:text||'(pas de réponse)',truncated:false}}
+geminiAI.limits=async()=>({tools:true,images:true});
+function aiKeyDlg(){modal(`<h3>Assistant : clé Gemini</h3><p class="mu">L’assistant utilise <b>Gemini</b> (Google) avec <b>votre propre clé gratuite</b>. Elle reste dans ce navigateur et vos messages partent directement chez Google : rien ne transite par un serveur CathIA.</p><ol class="mu"><li>Ouvrez <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> (connexion Google)</li><li>Créez une clé (« Create API key »)</li><li>Collez-la ici</li></ol><label>Clé Gemini<input id="gk_i" type="password" autocomplete="off" placeholder="AIza…" value="${esc(GK.get())}"></label><div class="r"><button class="p" id="gk_s">Enregistrer</button><button id="gk_x">Effacer la clé</button><button onclick="closeMd()">Fermer</button></div>`);
+ $('#gk_s').onclick=()=>{const v=$('#gk_i').value.trim();if(v&&!/^AIza[\w-]{20,}$/.test(v))return msg('Cette clé ne ressemble pas à une clé Gemini (elle commence par AIza).',6000);GK.set(v);closeMd();msg(v?'Clé enregistrée : l’assistant est prêt.':'Clé effacée.')};$('#gk_x').onclick=()=>{GK.set('');closeMd();msg('Clé effacée.')}}
+setTimeout(()=>{if(!window.__ai){window.__ai=geminiAI;AI_LIM={tools:true,images:true};buildRibbon()}},120);

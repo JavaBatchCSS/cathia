@@ -22,20 +22,20 @@ function doGet(e) {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 /* API JSON pour la version hébergée ailleurs (GitHub Pages) : l'application appelle ces fonctions par POST */
-var API_ = ['appInfo', 'authRequest', 'authVerify', 'authMe', 'authLogout', 'googleStart', 'googleClaim', 'listLibrary', 'readLibraryItem', 'readByLink', 'getThumb', 'publishModel'];
+var API_ = ['rateModel', 'deleteModel', 'appInfo', 'authRequest', 'authVerify', 'authMe', 'authLogout', 'googleStart', 'googleClaim', 'listLibrary', 'readLibraryItem', 'readByLink', 'getThumb', 'publishModel'];
 function doPost(e) {
   var out;
   try {
     var q = JSON.parse(e.postData.contents), fn = String(q.fn);
     if (API_.indexOf(fn) < 0) throw new Error('Fonction inconnue.');
-    out = { result: ({ appInfo: appInfo, authRequest: authRequest, authVerify: authVerify, authMe: authMe, authLogout: authLogout, googleStart: googleStart, googleClaim: googleClaim, listLibrary: listLibrary, readLibraryItem: readLibraryItem, readByLink: readByLink, getThumb: getThumb, publishModel: publishModel })[fn].apply(null, q.args || []) };
+    out = { result: ({ rateModel: rateModel, deleteModel: deleteModel, appInfo: appInfo, authRequest: authRequest, authVerify: authVerify, authMe: authMe, authLogout: authLogout, googleStart: googleStart, googleClaim: googleClaim, listLibrary: listLibrary, readLibraryItem: readLibraryItem, readByLink: readByLink, getThumb: getThumb, publishModel: publishModel })[fn].apply(null, q.args || []) };
   } catch (err) { out = { error: String(err && err.message || err) }; }
   return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
 }
 function appUrl_() { return props_().getProperty('APP_URL') || ScriptApp.getService().getUrl(); }
 function appInfo() {
   var p = props_(), ok = p.getProperty('GOOGLE_CLIENT_ID') && p.getProperty('GOOGLE_CLIENT_SECRET');
-  return { url: appUrl_(), gid: ok ? p.getProperty('GOOGLE_CLIENT_ID') : '' };
+  return { url: appUrl_(), gid: ok ? p.getProperty('GOOGLE_CLIENT_ID') : '', gh: !!ghTok_(), pages: PAGES_URL };
 }
 /* source complète de l'application (pour le téléchargement hors ligne) */
 function appSource() { return HtmlService.createHtmlOutputFromFile('index').getContent(); }
@@ -123,23 +123,28 @@ function googleStart(hint) {
   return { url: 'https://accounts.google.com/o/oauth2/v2/auth?' + Object.keys(q).map(function (k) { return k + '=' + encodeURIComponent(q[k]); }).join('&'), state: state };
 }
 function googleReturn_(p) {
-  var cache = CacheService.getScriptCache(), k = 'gc_' + p.state, ok = false, msg = 'Connexion Google refusée.';
+  var cache = CacheService.getScriptCache(), k = 'gc_' + p.state, ok = false, msg = 'Connexion Google refusée.', done = cache.get(k);
+  if (done) { var d = JSON.parse(done); return googlePage_(!d.err, d.err || ''); }   // deuxième chargement de la même page : on garde le premier résultat
   try {
     if (!cache.get('gn_' + p.state)) throw new Error('Demande expirée : recommencez.');
     cache.remove('gn_' + p.state);
     var pr = props_(), cid = pr.getProperty('GOOGLE_CLIENT_ID');
     var r = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', { method: 'post', muteHttpExceptions: true, payload: { code: p.code, client_id: cid, client_secret: pr.getProperty('GOOGLE_CLIENT_SECRET'), redirect_uri: appUrl_(), grant_type: 'authorization_code' } });
     var t = JSON.parse(r.getContentText());
-    if (r.getResponseCode() !== 200 || !t.id_token || !t.access_token) throw new Error('Google a refusé la connexion.');
+    if (r.getResponseCode() !== 200 || !t.id_token || !t.access_token) throw new Error('Google a refusé la connexion (' + (t.error_description || t.error || r.getResponseCode()) + ').');
     if (String(t.scope || '').indexOf('auth/drive.file') < 0) throw new Error('Il faut autoriser l’accès aux fichiers créés par CathIA pour enregistrer dans votre Drive.');
-    var c = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(t.id_token.split('.')[1])).getDataAsString());
+    var seg = t.id_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'); while (seg.length % 4) seg += '=';
+    var c = JSON.parse(Utilities.newBlob(Utilities.base64Decode(seg)).getDataAsString());
     if (c.aud !== cid || (c.iss !== 'https://accounts.google.com' && c.iss !== 'accounts.google.com') || !c.email || c.email_verified !== true) throw new Error('Identité Google non vérifiée.');
     var mail = String(c.email).toLowerCase();
-    cache.put(k, JSON.stringify({ token: session_(mail), email: mail, at: t.access_token, exp: Date.now() + (+t.expires_in || 3600) * 1000 }), 120);
+    cache.put(k, JSON.stringify({ token: session_(mail), email: mail, at: t.access_token, exp: Date.now() + (+t.expires_in || 3600) * 1000 }), 300);
     ok = true;
-  } catch (err) { msg = String(err.message || err); cache.put(k, JSON.stringify({ err: msg }), 120); }
+  } catch (err) { msg = String(err.message || err); cache.put(k, JSON.stringify({ err: msg }), 300); }
+  return googlePage_(ok, msg);
+}
+function googlePage_(ok, msg) {
   var html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:16px system-ui,sans-serif;text-align:center;padding:48px 20px;color:#222}</style></head><body><h2>' +
-    (ok ? 'Connexion réussie' : 'Connexion impossible') + '</h2><p>' + (ok ? 'Vous pouvez fermer cette fenêtre et retourner dans CathIA.' : msg.replace(/[<>&]/g, '')) +
+    (ok ? 'Connexion réussie' : 'Connexion impossible') + '</h2><p>' + (ok ? 'Vous pouvez fermer cette fenêtre et retourner dans CathIA.' : String(msg).replace(/[<>&]/g, '')) +
     '</p><script>setTimeout(function(){try{window.top.close()}catch(e){}},1200)<\/script></body></html>';
   return HtmlService.createHtmlOutput(html).setTitle('CathIA');
 }
@@ -202,7 +207,7 @@ function ecrire_(dossier, files, email) {
   });
 }
 function biblio_(which) { return DriveApp.getFolderById(which === 'verified' ? VERIFIED_ID : COMMUNITY_ID); }
-function listLibrary(which) {
+function listLibraryDrive_(which) {
   if (which !== 'verified' && which !== 'community') throw new Error('Bibliothèque inconnue.');
   var cache = CacheService.getScriptCache(), ck = 'lib2_' + which, c = cache.get(ck);
   if (c) return JSON.parse(c);
@@ -251,7 +256,7 @@ function getThumb(which, id) {
   if (out.length < 95000) try { cache.put(ck, out || ' ', 3600); } catch (e) {}
   return out;
 }
-function publishModel(tok, name, files, fiche) {
+function publishModelDrive_(tok, name, files, fiche) {
   var email = user_(tok), base = clean_(name), nom = base + '.cathia', root = biblio_('community'), h = sha_(email);
   limite_(email, 'pub', 10);
   var lock = LockService.getScriptLock();
@@ -274,3 +279,122 @@ function publishModel(tok, name, files, fiche) {
 }
 /* à lancer une fois depuis l'éditeur : déclenche la demande d'autorisation des services utilisés */
 function autorisation() { UrlFetchApp.fetch('https://oauth2.googleapis.com/'); MailApp.getRemainingDailyQuota(); DriveApp.getRootFolder(); return 'ok'; }
+
+/* ============ Modèles de la communauté : stockés dans le dépôt GitHub public (un dossier par utilisateur), notés sur 5 ============
+ * Propriété du script à renseigner : GITHUB_TOKEN (jeton « fine-grained » limité au dépôt, droit Contents : lecture/écriture).
+ * Sans ce jeton, la publication retombe sur l'ancien dossier Drive. */
+var GH_REPO = 'JavaBatchCSS/cathia', GH_BRANCH = 'main', PAGES_URL = 'https://javabatchcss.github.io/cathia/';
+var RAW_ = 'https://raw.githubusercontent.com/' + GH_REPO + '/' + GH_BRANCH + '/';
+function ghTok_() { return props_().getProperty('GITHUB_TOKEN') || ''; }
+function gh_(method, path, body) {
+  var r = UrlFetchApp.fetch('https://api.github.com/repos/' + GH_REPO + path, {
+    method: method, muteHttpExceptions: true, contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ghTok_(), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'CathIA' },
+    payload: body ? JSON.stringify(body) : undefined
+  });
+  var c = r.getResponseCode(), t = r.getContentText();
+  if (c >= 300) { var e = new Error('GitHub ' + c + ' : ' + t.slice(0, 160)); e.code = c; throw e; }
+  return t ? JSON.parse(t) : {};
+}
+function userKey_(email) { return 'u' + sha_('gh|' + email).slice(0, 10); }
+function slug_(n) {
+  return String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'modele';
+}
+function indexGh_() {
+  var cache = CacheService.getScriptCache(), c = cache.get('gh_idx');
+  if (c) return JSON.parse(c);
+  var r = UrlFetchApp.fetch(RAW_ + 'library/index.json?t=' + Date.now(), { muteHttpExceptions: true }), out = [];
+  if (r.getResponseCode() === 200) { try { out = JSON.parse(r.getContentText()); } catch (e) {} }
+  try { cache.put('gh_idx', JSON.stringify(out), 20); } catch (e) {}
+  return out;
+}
+function ratings_() {
+  var all = props_().getProperties(), R = {};
+  Object.keys(all).forEach(function (k) { if (k.indexOf('R_') === 0) { try { var o = JSON.parse(all[k]); R[o.id] = o.v; } catch (e) {} } });
+  return R;
+}
+function listLibrary(which, tok) {
+  if (which !== 'community' || !ghTok_()) return listLibraryDrive_(which);
+  var me = '', R = ratings_();
+  try { if (tok) me = userKey_(user_(tok)); } catch (e) {}
+  var out = indexGh_().map(function (m) {
+    var v = R[m.id] || {}, ks = Object.keys(v), n = ks.length, sum = 0;
+    ks.forEach(function (k) { sum += v[k]; });
+    var avg = n ? sum / n : 0;
+    return { id: m.id, name: m.name, fiche: m.fiche || null, t: m.t, u: m.u, mine: !!me && m.u === me, avg: Math.round(avg * 10) / 10, n: n, my: me && v[me] || 0,
+      score: (avg * n + 3 * 2) / (n + 2), thumb: m.thumb ? RAW_ + m.thumb : '', html: RAW_ + m.html };
+  });
+  out.sort(function (a, b) { return b.score - a.score || b.t - a.t; });
+  return out.slice(0, 400);
+}
+function rateModel(tok, id, stars) {
+  var email = user_(tok), uk = userKey_(email), n = Math.round(+stars);
+  if (!(n >= 1 && n <= 5)) throw new Error('Note de 1 à 5.');
+  var m = indexGh_().filter(function (x) { return x.id === id; })[0];
+  if (!m) throw new Error('Modèle introuvable.');
+  if (m.u === uk) throw new Error('Vous ne pouvez pas noter votre propre modèle.');
+  var lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    var key = 'R_' + sha_(id).slice(0, 16), raw = props_().getProperty(key), o = raw ? JSON.parse(raw) : { id: id, v: {} };
+    o.v[uk] = n; props_().setProperty(key, JSON.stringify(o));
+  } finally { lock.releaseLock(); }
+  var v = ratings_()[id] || {}, ks = Object.keys(v), sum = 0; ks.forEach(function (k) { sum += v[k]; });
+  return { avg: Math.round(sum / ks.length * 10) / 10, n: ks.length, my: n };
+}
+/* écrit plusieurs fichiers (et l'index) en UNE validation Git */
+function ghCommit_(msg, put, del) {
+  var ref = gh_('GET', '/git/ref/heads/' + GH_BRANCH), baseSha = ref.object.sha, base = gh_('GET', '/git/commits/' + baseSha), tree = [];
+  Object.keys(put).forEach(function (path) {
+    var b = gh_('POST', '/git/blobs', { content: put[path], encoding: 'base64' });
+    tree.push({ path: path, mode: '100644', type: 'blob', sha: b.sha });
+  });
+  (del || []).forEach(function (path) { tree.push({ path: path, mode: '100644', type: 'blob', sha: null }); });
+  var t = gh_('POST', '/git/trees', { base_tree: base.tree.sha, tree: tree }), c = gh_('POST', '/git/commits', { message: msg, tree: t.sha, parents: [baseSha] });
+  gh_('PATCH', '/git/refs/heads/' + GH_BRANCH, { sha: c.sha });
+  CacheService.getScriptCache().remove('gh_idx');
+}
+function indexNow_() {
+  try { var f = gh_('GET', '/contents/library/index.json?ref=' + GH_BRANCH); return JSON.parse(Utilities.newBlob(Utilities.base64Decode(f.content.replace(/\n/g, ''))).getDataAsString('UTF-8')); }
+  catch (e) { if (e.code === 404) return []; throw e; }
+}
+function publishModel(tok, name, files, fiche) {
+  if (!ghTok_()) return publishModelDrive_(tok, name, files, fiche);
+  var email = user_(tok), uk = userKey_(email), s = slug_(name), id = uk + '~' + s, dir = 'models/' + uk + '/' + s + '/', put = {}, html = '', thumb = '', total = 0;
+  limite_(email, 'pub', 20);
+  (files || []).forEach(function (f) {
+    var n = clean_(f.n).replace(/[^\w.\- ]+/g, '_');
+    if (!EXT_OK.test(n)) throw new Error('Type de fichier non accepté : ' + n);
+    total += String(f.b || '').length * 0.75; if (total > 20 * 1024 * 1024) throw new Error('Projet trop volumineux pour la communauté (20 Mo maximum).');
+    var b64 = f.b;
+    if (/\.(html|xhtml|svg)$/i.test(n)) {
+      var txt = Utilities.newBlob(Utilities.base64Decode(f.b)).getDataAsString('UTF-8').replace(/@@CATHIA_ID@@/g, id).replace(/@@CATHIA_EMAIL@@/g, uk).replace(/@@CATHIA_APP@@/g, PAGES_URL);
+      b64 = Utilities.base64Encode(Utilities.newBlob(txt).getBytes());
+    }
+    put[dir + n] = b64;
+    if (/\.cathia\.html$/i.test(n)) html = dir + n; else if (/^vignette\.jpg$/i.test(n)) thumb = dir + n;
+  });
+  if (!html) throw new Error('Le modèle 3D (.html) est manquant.');
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var idx = indexNow_().filter(function (m) { return m.id !== id; });
+    idx.push({ id: id, name: clean_(name), u: uk, fiche: fiche_(fiche), t: Date.now(), html: html, thumb: thumb });
+    put['library/index.json'] = Utilities.base64Encode(Utilities.newBlob(JSON.stringify(idx)).getBytes());
+    ghCommit_('Publication : ' + clean_(name), put);
+  } finally { lock.releaseLock(); }
+  return { id: id, name: clean_(name), public: true };
+}
+function deleteModel(tok, id) {
+  if (!ghTok_()) throw new Error('Suppression indisponible.');
+  var uk = userKey_(user_(tok)), lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var idx = indexNow_(), m = idx.filter(function (x) { return x.id === id; })[0];
+    if (!m) throw new Error('Modèle introuvable.');
+    if (m.u !== uk) throw new Error('Ce modèle ne vous appartient pas.');
+    var ref = gh_('GET', '/git/ref/heads/' + GH_BRANCH), base = gh_('GET', '/git/commits/' + ref.object.sha), all = gh_('GET', '/git/trees/' + base.tree.sha + '?recursive=1').tree, dir = 'models/' + uk + '/' + id.split('~')[1] + '/';
+    var del = all.filter(function (e) { return e.type === 'blob' && e.path.indexOf(dir) === 0; }).map(function (e) { return e.path; });
+    var put = {}; put['library/index.json'] = Utilities.base64Encode(Utilities.newBlob(JSON.stringify(idx.filter(function (x) { return x.id !== id; }))).getBytes());
+    ghCommit_('Retrait : ' + m.name, put, del);
+    var R = props_(); R.deleteProperty('R_' + sha_(id).slice(0, 16));
+  } finally { lock.releaseLock(); }
+  return true;
+}
